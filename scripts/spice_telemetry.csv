@@ -1,0 +1,6 @@
+timestamp,spice_orbit_sync,kernel_ref
+2025-03-29,1.0,al1_eph_29Mar2025_02May2025_v1.bsp
+2025-12-27,1.0,al1_att_27Dec2025_03Feb2026_v1.bc
+2026-01-29,1.0,al1_eph_29Jan2026_02Mar2026_v1.bsp
+2026-01-30,1.0,al1_att_30Jan2026_04Mar2026_v1.bc
+2026-02-27,1.0,al1_att_27Feb2026_04Apr2026_v1.bc
