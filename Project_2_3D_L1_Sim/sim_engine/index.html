@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aditya-L1 Multimodal Command Center - 3D Engine</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/0.160.0/three.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { margin: 0; overflow: hidden; background: #020617; font-family: 'Inter', sans-serif; }
+        #canvas-container { width: 100vw; height: 100vh; }
+        
+        .glass {
+            background: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(12px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 16px;
+        }
+
+        .hud-overlay { position: absolute; z-index: 100; pointer-events: none; width: 100%; height: 100%; display: flex; flex-direction: column; justify-content: space-between; padding: 30px; }
+        .interactive { pointer-events: auto; }
+
+        .scanline {
+            width: 100%; height: 2px; background: rgba(56, 189, 248, 0.1);
+            position: absolute; top: 0; left: 0; animation: scan 4s linear infinite;
+        }
+        @keyframes scan { 0% { top: 0; } 100% { top: 100%; } }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div class="scanline"></div>
+
+    <div class="hud-overlay">
+        <div class="flex justify-between items-start">
+            <div class="glass p-6 w-96 interactive">
+                <div class="flex items-center gap-3 mb-4">
+                    <div class="w-3 h-3 bg-blue-500 rounded-full animate-pulse"></div>
+                    <h1 class="text-xl font-black text-blue-400">CMD_CENTER_SATELLITE_L1</h1>
+                </div>
+                <div class="grid grid-cols-2 gap-4 text-[10px] font-mono opacity-80">
+                    <div>PITCH: <span id="val-pitch">0.0°</span></div>
+                    <div>YAW: <span id="val-yaw">0.0°</span></div>
+                    <div>ROLL: <span id="val-roll">0.0°</span></div>
+                    <div>SYNC: <span class="text-green-400">ACTIVE</span></div>
+                </div>
+            </div>
+
+            <button id="pilot-toggle" class="glass px-10 py-4 font-black transition-all hover:bg-blue-600/30 text-blue-200 tracking-widest interactive">
+                 PILOT_MODE: OFF
+            </button>
+        </div>
+
+        <div class="flex justify-center items-end pb-10">
+            <div class="glass p-6 w-[600px] flex justify-between items-center interactive">
+                <div class="space-y-1">
+                    <p class="text-[10px] text-slate-500 uppercase tracking-widest">Target Asset</p>
+                    <p class="text-lg font-bold">ADITYA-L1 MISSION</p>
+                </div>
+                <div class="h-10 w-px bg-white/10 mx-6"></div>
+                <div class="flex gap-10">
+                    <div class="text-center">
+                        <p class="text-[10px] text-slate-500">B_TOTAL</p>
+                        <p class="text-xl font-mono text-cyan-400" id="val-mag">4.2 nT</p>
+                    </div>
+                    <div class="text-center">
+                        <p class="text-[10px] text-slate-500">FLARE_PROB</p>
+                        <p class="text-xl font-mono text-yellow-400" id="val-flare">12%</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // THREE.JS CORE
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+        let isPilotMode = false;
+        const targetPos = { x: 0, y: 0, z: 25 }; 
+        const pilotPos = { x: 0, y: 0, z: 15.2 };
+
+        // ENV: Stars
+        const starGeo = new THREE.BufferGeometry();
+        const starPos = new Float32Array(6000 * 3);
+        for(let i=0; i<18000; i++) starPos[i] = (Math.random() - 0.5) * 800;
+        starGeo.setAttribute('position', new THREE.BufferAttribute(starPos, 3));
+        const stars = new THREE.Points(starGeo, new THREE.PointsMaterial({color: 0xffffff, size: 0.1}));
+        scene.add(stars);
+
+        // SUN
+        const sun = new THREE.Mesh(new THREE.SphereGeometry(6, 64, 64), new THREE.MeshBasicMaterial({ color: 0xffff44 }));
+        scene.add(sun);
+        const sunLight = new THREE.PointLight(0xffffff, 3, 300);
+        scene.add(sunLight);
+
+        // ADITYA-L1 MODEL (CHASSIS + INTERIOR)
+        const chassis = new THREE.Group();
+        const body = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.1, side: THREE.DoubleSide }));
+        chassis.add(body);
+
+        // Interior 3D Panels
+        const panelGroup = new THREE.Group();
+        const p1 = new THREE.Mesh(new THREE.PlaneGeometry(0.8, 0.5), new THREE.MeshBasicMaterial({ color: 0x00ffff, transparent: true, opacity: 0.2, side: THREE.DoubleSide }));
+        p1.position.set(0, 0.5, -0.8);
+        panelGroup.add(p1);
+        chassis.add(panelGroup);
+        panelGroup.visible = false;
+
+        // Solar Array
+        const panelMat = new THREE.MeshStandardMaterial({ color: 0x002244 });
+        const pLeft = new THREE.Mesh(new THREE.BoxGeometry(4, 0.1, 1.5), panelMat); pLeft.position.x = -3;
+        const pRight = new THREE.Mesh(new THREE.BoxGeometry(4, 0.1, 1.5), panelMat); pRight.position.x = 3;
+        chassis.add(pLeft, pRight);
+
+        scene.add(chassis);
+        chassis.position.z = 15;
+
+        // NEW: Particle System for CME
+        const particleCount = 2000;
+        const particles = new THREE.BufferGeometry();
+        const positions = new Float32Array(particleCount * 3);
+        const velocities = new Float32Array(particleCount * 3);
+        for (let i = 0; i < particleCount; i++) {
+            positions[i * 3] = (Math.random() - 0.5) * 10;
+            positions[i * 3 + 1] = (Math.random() - 0.5) * 10;
+            positions[i * 3 + 2] = (Math.random() - 0.5) * 10;
+            velocities[i * 3 + 2] = 0.1 + Math.random() * 0.1;
+        }
+        particles.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+        const pMaterial = new THREE.PointsMaterial({ color: 0xffffff, size: 0.05, transparent: true, opacity: 0.6 });
+        const particleSystem = new THREE.Points(particles, pMaterial);
+        scene.add(particleSystem);
+
+        camera.position.z = 25;
+
+        // INTERACTIVE TOGGLE
+        const btn = document.getElementById('pilot-toggle');
+        btn.addEventListener('click', () => {
+            isPilotMode = !isPilotMode;
+            btn.innerText = `PILOT_MODE: ${isPilotMode ? 'ON' : 'OFF'}`;
+            btn.classList.toggle('bg-blue-600', isPilotMode);
+            panelGroup.visible = isPilotMode;
+        });
+
+        // ANIMATION & PERFORMANCE MONITORING (AFR)
+        let lastTime = 0;
+        let frameCount = 0;
+        let fps = 0;
+
+        function animate() {
+            requestAnimationFrame(animate);
+            const now = Date.now();
+            frameCount++;
+
+            // Adaptive Framerate (AFR) Logic
+            if (now - lastTime >= 1000) {
+                fps = frameCount;
+                frameCount = 0;
+                lastTime = now;
+                if (fps < 45) {
+                    pMaterial.opacity = 0.2;
+                    particleSystem.visible = (fps > 30);
+                } else {
+                    pMaterial.opacity = 0.6;
+                    particleSystem.visible = true;
+                }
+            }
+
+            // Smooth Camera Transition
+            const dest = isPilotMode ? pilotPos : targetPos;
+            camera.position.x += (dest.x - camera.position.x) * 0.05;
+            camera.position.y += (dest.y - camera.position.y) * 0.05;
+            camera.position.z += (dest.z - camera.position.z) * 0.05;
+
+            // Chassis movement
+            const t = Date.now() * 0.001;
+            if(!isPilotMode) {
+                chassis.rotation.y += 0.005;
+                chassis.position.y = Math.sin(t) * 0.5;
+            } else {
+                chassis.rotation.y *= 0.95;
+            }
+
+            // Update Particles
+            const posAttr = particles.attributes.position.array;
+            for (let i = 0; i < particleCount; i++) {
+                posAttr[i * 3 + 2] += velocities[i * 3 + 2];
+                if (posAttr[i * 3 + 2] > 30) posAttr[i * 3 + 2] = 0;
+            }
+            particles.attributes.position.needsUpdate = true;
+
+            // HUD Values
+            document.getElementById('val-pitch').innerText = (chassis.rotation.x * 57).toFixed(1) + '°';
+            document.getElementById('val-yaw').innerText = (chassis.rotation.y * 57).toFixed(1) + '°';
+            
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        window.addEventListener('resize', () => {
+             camera.aspect = window.innerWidth / window.innerHeight;
+             camera.updateProjectionMatrix();
+             renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
